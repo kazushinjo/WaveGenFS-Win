@@ -14,7 +14,7 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <Product>WaveGenFS 低周波信号発生器</Product>
     <Authors>Kazu Shinjo</Authors>
-    <Copyright>Copyright (C) 2026 Kazu Shinjo (JA6FUF/JH1XHX) / GPL v3</Copyright>
+    <Copyright>Copyright (C) 2026 Kazu Shinjo (JA6FUF/JH1XHX) / GPL v3 / 無保証</Copyright>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 
