@@ -43,3 +43,9 @@ dotnet build -c Release
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
 ```
 Mac / Linux でビルドするときは `-p:EnableWindowsTargeting=true` を付ける。アイコンは `app.ico` (Mac 版と同じサイン波)。
+
+## ライセンス
+GPL v3 (GNU General Public License version 3)。本文は [LICENSE](LICENSE)。
+Copyright (C) 2026 Kazu Shinjo (JA6FUF/JH1XHX)
+
+このプログラムはフリーソフトウェアです。GPL v3 (またはそれ以降の版) の条件で再配布・改変できます。無保証です。
