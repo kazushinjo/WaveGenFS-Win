@@ -43,7 +43,7 @@ public class WavePanel : GroupBox
     public WaveParams P;
     public event Action Changed;
     public event Action<WavePanel> DetailRequested;
-    /// <summary>(このパネル, 倍数) : Wave1/Wave5 の倍数に設定</summary>
+    /// <summary>(このパネル, 倍数) : Wave1 の倍数に設定</summary>
     public event Action<WavePanel, int> MultipleRequested;
 
     readonly ComboBox cbType, cbCh;
@@ -160,10 +160,9 @@ public class WavePanel : GroupBox
         };
         m.Items.Add(fit);
         m.Items.Add(nMenu);
-        if (Index != 0 && Index != 4)
+        if (Index != 0)
         {
-            int baseW = Index < 4 ? 1 : 5;
-            var mul = new ToolStripMenuItem($"Wave{baseW} の倍数");
+            var mul = new ToolStripMenuItem("Wave1 の倍数");
             foreach (var x in new[] { 2, 3, 4, 5, 6, 8, 10 })
             {
                 var it = new ToolStripMenuItem($"x{x}");

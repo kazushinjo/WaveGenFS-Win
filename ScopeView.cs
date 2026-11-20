@@ -13,6 +13,7 @@ public class ScopeView : Control
     public int SpanIdx = 6;
     public int YZoomIdx;
     public int DispCh;           // 0: L+R, 1: L, 2: R
+    public bool Split;           // L/R 分離表示 (上段 L・下段 R)
     public bool Mono;
     public string[] Overlay = Array.Empty<string>();
     public string Status = "";
@@ -88,78 +89,71 @@ public class ScopeView : Control
         }
         string lblFmt = ymax < 0.1 || (ymax * 100) % 1 != 0 ? "+0.0'%';-0.0'%';0" : "+0'%';-0'%';0";
         float leftM = g.MeasureString((-ymax * 100).ToString(lblFmt), font).Width + 8 * scale;
-        var plot = new RectangleF(leftM, 6 * scale, Width - leftM - 14 * scale, Height - 6 * scale - lineH - 8 * scale);
-        if (plot.Width < 20 || plot.Height < 20) { tb.Dispose(); return; }
+        var full = new RectangleF(leftM, 6 * scale, Width - leftM - 14 * scale, Height - 6 * scale - lineH - 8 * scale);
+        // L/R 分離: 上段 L・下段 R (同じ振幅スケール)
+        bool isSplit = Split && showL && showR;
+        var areas = new List<(RectangleF rect, int ch)>();   // ch: 0=L, 1=R, -1=表示ch どおり
+        if (isSplit)
+        {
+            float gap = lineH * 1.2f, h = (full.Height - gap) / 2;
+            areas.Add((new RectangleF(full.X, full.Y, full.Width, h), 0));
+            areas.Add((new RectangleF(full.X, full.Y + h + gap, full.Width, h), 1));
+        }
+        else areas.Add((full, -1));
+        if (full.Width < 20 || areas.Any(ar => ar.rect.Height < 20)) { tb.Dispose(); return; }
 
         using var gridPen = new Pen(GridCol, Math.Max(1, scale * 0.8f)) { DashStyle = DashStyle.Dash };
         using var framePen = new Pen(FrameCol, Math.Max(1, scale));
+        var clip = g.Clip;
 
-        // 横線 (振幅)
-        double ystep = NiceStep(2 * ymax, plot.Height > 400 ? 8 : 4);
-        var ys = new List<double>();
-        for (double y = -Math.Floor(ymax / ystep + 1e-9) * ystep; y <= ymax + 1e-9; y += ystep) ys.Add(y);
-        // 上下端の値も必ず表示 (近すぎる目盛りは省く)
-        ys.RemoveAll(y => Math.Abs(Math.Abs(y) - ymax) > 1e-9 && ymax - Math.Abs(y) < ystep * 0.4);
-        if (!ys.Any(y => Math.Abs(y - ymax) < 1e-9)) { ys.Add(ymax); ys.Add(-ymax); }
-        foreach (var y in ys)
+        for (int ai = 0; ai < areas.Count; ai++)
         {
-            float py = (float)(plot.Top + (ymax - y) / (2 * ymax) * plot.Height);
-            if (Math.Abs(y) > 1e-12 && Math.Abs(Math.Abs(y) - ymax) > 1e-9) g.DrawLine(gridPen, plot.Left, py, plot.Right, py);
-            if (Math.Abs(y) < 1e-12) g.DrawLine(framePen, plot.Left, py, plot.Right, py);
-            string s = (y * 100).ToString(lblFmt);
-            var sz = g.MeasureString(s, font);
-            g.DrawString(s, font, tb, plot.Left - sz.Width - 2 * scale, py - sz.Height / 2);
-        }
-        // 縦線 (時間)
-        double xstep = NiceStep(span, Math.Max(4, (int)(plot.Width / (70 * scale))));
-        for (double x = xstep; x < span - 1e-9; x += xstep)
-        {
-            float px = (float)(plot.Left + x / span * plot.Width);
-            g.DrawLine(gridPen, px, plot.Top, px, plot.Bottom);
-            string s = x.ToString("0.###");
-            var sz = g.MeasureString(s, font);
-            g.DrawString(s, font, tb, px - sz.Width / 2, plot.Bottom + 2 * scale);
-        }
-        g.DrawString("ms", font, tb, plot.Right - g.MeasureString("ms", font).Width, plot.Bottom + 2 * scale);
-        g.DrawRectangle(framePen, plot.X, plot.Y, plot.Width, plot.Height);
+            var plot = areas[ai].rect;
+            int ach = areas[ai].ch;
+            bool isLast = ai == areas.Count - 1;
 
-        // 波形
-        var clip = g.Clip; g.SetClip(plot);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        if (showR) DrawTrace(g, R, nSamp, plot, ymax, RCol, scale);
-        if (showL) DrawTrace(g, L, nSamp, plot, ymax, LCol, scale);
-        g.SmoothingMode = SmoothingMode.None;
+            // 横線 (振幅)
+            double ystep = NiceStep(2 * ymax, plot.Height > 400 ? 8 : plot.Height > 160 ? 4 : 2);
+            var ys = new List<double>();
+            for (double y = -Math.Floor(ymax / ystep + 1e-9) * ystep; y <= ymax + 1e-9; y += ystep) ys.Add(y);
+            // 上下端の値も必ず表示 (近すぎる目盛りは省く)
+            ys.RemoveAll(y => Math.Abs(Math.Abs(y) - ymax) > 1e-9 && ymax - Math.Abs(y) < ystep * 0.4);
+            if (!ys.Any(y => Math.Abs(y - ymax) < 1e-9)) { ys.Add(ymax); ys.Add(-ymax); }
+            foreach (var y in ys)
+            {
+                float py = (float)(plot.Top + (ymax - y) / (2 * ymax) * plot.Height);
+                if (Math.Abs(y) > 1e-12 && Math.Abs(Math.Abs(y) - ymax) > 1e-9) g.DrawLine(gridPen, plot.Left, py, plot.Right, py);
+                if (Math.Abs(y) < 1e-12) g.DrawLine(framePen, plot.Left, py, plot.Right, py);
+                string s = (y * 100).ToString(lblFmt);
+                var sz = g.MeasureString(s, font);
+                g.DrawString(s, font, tb, plot.Left - sz.Width - 2 * scale, py - sz.Height / 2);
+            }
+            // 縦線 (時間)。時間の数字は一番下の枠だけ
+            double xstep = NiceStep(span, Math.Max(4, (int)(plot.Width / (70 * scale))));
+            for (double x = xstep; x < span - 1e-9; x += xstep)
+            {
+                float px = (float)(plot.Left + x / span * plot.Width);
+                g.DrawLine(gridPen, px, plot.Top, px, plot.Bottom);
+                if (!isLast) continue;
+                string s = x.ToString("0.###");
+                var sz = g.MeasureString(s, font);
+                g.DrawString(s, font, tb, px - sz.Width / 2, plot.Bottom + 2 * scale);
+            }
+            if (isLast) g.DrawString("ms", font, tb, plot.Right - g.MeasureString("ms", font).Width, plot.Bottom + 2 * scale);
+            g.DrawRectangle(framePen, plot.X, plot.Y, plot.Width, plot.Height);
 
-        // オーバーレイ文字
-        float ty = plot.Top + 4 * scale;
-        float statusW = string.IsNullOrEmpty(Status) ? 0 : g.MeasureString(Status, font).Width;
-        float ovW = Overlay.Length == 0 ? 0 : g.MeasureString(Overlay[0], font).Width;
-        if (statusW > 0 && ovW + statusW + 20 * scale > plot.Width) ty += lineH;
-        foreach (var line in Overlay)
-        {
-            g.DrawString(line, font, tb, plot.Left + 6 * scale, ty);
-            ty += lineH;
-        }
-        if (!string.IsNullOrEmpty(Status))
-        {
-            var sz = g.MeasureString(Status, font);
-            using var sb = new SolidBrush(Clip ? Color.Red : TextCol);
-            g.DrawString(Status, font, sb, plot.Right - sz.Width - 6 * scale, plot.Top + 4 * scale);
-        }
-        var notes = new List<string>();
-        if (auto) notes.Add($"自動スケール ±{ymax * 100:0.###}%");
-        if (WaveClipped) notes.Add("クリップ発生 (±100%で制限)");
-        if (notes.Count > 0)
-        {
-            string a = string.Join("   ", notes);
-            var sz = g.MeasureString(a, font);
-            using var ab = new SolidBrush(WaveClipped ? Color.Red : TextCol);
-            g.DrawString(a, font, ab, plot.Left + 6 * scale, plot.Bottom - sz.Height - 4 * scale);
-        }
-        string legend = Mono ? "Mono" : DispCh == 0 ? "L  R" : DispCh == 1 ? "L" : "R";
-        {
-            var sz = g.MeasureString(legend, font);
-            float lx = plot.Right - sz.Width - 6 * scale, ly = plot.Bottom - sz.Height - 4 * scale;
+            // 波形
+            g.SetClip(plot);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (showR && ach != 0) DrawTrace(g, R, nSamp, plot, ymax, RCol, scale);
+            if (showL && ach != 1) DrawTrace(g, L, nSamp, plot, ymax, LCol, scale);
+            g.SmoothingMode = SmoothingMode.None;
+            g.Clip = clip;
+
+            // 凡例
+            string legend = ach == 0 ? "L" : ach == 1 ? "R" : Mono ? "Mono" : DispCh == 0 ? "L  R" : DispCh == 1 ? "L" : "R";
+            var lsz = g.MeasureString(legend, font);
+            float lx = plot.Right - lsz.Width - 6 * scale, ly = plot.Bottom - lsz.Height - 4 * scale;
             if (legend == "L  R")
             {
                 using var lb = new SolidBrush(LCol); using var rb = new SolidBrush(RCol);
@@ -171,6 +165,36 @@ public class ScopeView : Control
                 using var lb = new SolidBrush(legend == "R" ? RCol : LCol);
                 g.DrawString(legend, font, lb, lx, ly);
             }
+        }
+
+        var top = areas[0].rect;
+        var bottom = areas[^1].rect;
+        g.SetClip(full);
+        // オーバーレイ文字
+        float ty = top.Top + 4 * scale;
+        float statusW = string.IsNullOrEmpty(Status) ? 0 : g.MeasureString(Status, font).Width;
+        float ovW = Overlay.Length == 0 ? 0 : g.MeasureString(Overlay[0], font).Width;
+        if (statusW > 0 && ovW + statusW + 20 * scale > top.Width) ty += lineH;
+        foreach (var line in Overlay)
+        {
+            g.DrawString(line, font, tb, top.Left + 6 * scale, ty);
+            ty += lineH;
+        }
+        if (!string.IsNullOrEmpty(Status))
+        {
+            var sz = g.MeasureString(Status, font);
+            using var sb = new SolidBrush(Clip ? Color.Red : TextCol);
+            g.DrawString(Status, font, sb, top.Right - sz.Width - 6 * scale, top.Top + 4 * scale);
+        }
+        var notes = new List<string>();
+        if (auto) notes.Add($"自動スケール ±{ymax * 100:0.###}%");
+        if (WaveClipped) notes.Add("クリップ発生 (±100%で制限)");
+        if (notes.Count > 0)
+        {
+            string a = string.Join("   ", notes);
+            var sz = g.MeasureString(a, font);
+            using var ab = new SolidBrush(WaveClipped ? Color.Red : TextCol);
+            g.DrawString(a, font, ab, bottom.Left + 6 * scale, bottom.Bottom - sz.Height - 4 * scale);
         }
         g.Clip = clip;
         tb.Dispose();

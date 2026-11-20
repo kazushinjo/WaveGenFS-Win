@@ -23,6 +23,10 @@ public class AppSettings
     public bool FullVolume { get; set; }
     public string Comment { get; set; } = "";
     public string LastParamDir { get; set; } = "";
+    /// <summary>L/R 分離表示 (上段 L・下段 R)</summary>
+    public bool SplitLR { get; set; }
+    /// <summary>表示する Wave の数 (1〜5)</summary>
+    public int WaveCount { get; set; } = 5;
 }
 
 /// <summary>設定ファイル (*.wgfs) の内容</summary>
@@ -44,6 +48,10 @@ public class MainForm : Form
     static readonly int[] FsList = { 8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 384000 };
     static readonly string[] BitsNames = { "16", "24", "32 float" };
     static readonly int[] BitsList = { 16, 24, 32 };
+    /// <summary>使える Wave の最大数。設定ファイルは 8 系統の形式のまま (Wave6〜8 は OFF)</summary>
+    public const int MaxWaves = 5;
+    /// <summary>表示する Wave の数 (1〜MaxWaves)。隠した Wave は設定を残したまま出力しない</summary>
+    int usedWaves = MaxWaves;
 
     readonly string iniPath = Path.Combine(AppContext.BaseDirectory, "WaveGenFS.json");
     AppSettings cfg;
@@ -51,19 +59,20 @@ public class MainForm : Form
 
     readonly WaveOutPlayer player = new();
     readonly ScopeView scope = new() { Dock = DockStyle.Fill };
-    readonly TabControl tabs = new() { Dock = DockStyle.Top };
+    readonly FlowLayoutPanel panelRow = new() { Dock = DockStyle.Top, AutoSize = true, WrapContents = false, Padding = new Padding(2) };
     readonly FlowLayoutPanel toolbar = new() { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(2) };
     readonly FlowLayoutPanel levelRow = new() { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(2) };
     readonly WavePanel[] panels = new WavePanel[Synth.NWaves];
     readonly DetailForm[] details = new DetailForm[Synth.NWaves];
     readonly Label[] levelLbl = new Label[Synth.NWaves];
+    readonly Label[] levelNum = new Label[Synth.NWaves];
     readonly Label outLbl = new() { AutoSize = true, Margin = new Padding(12, 6, 2, 2) };
     Button bPlay, bFull, bHide;
-    CheckBox chkAtt, chkFullVol;
+    CheckBox chkAtt, chkFullVol, chkSplit;
     NumericUpDown nAttN;
     Label lAttDb;
     TextBox tbComment;
-    ComboBox cbFs, cbBits, cbCh, cbDev, cbDisp;
+    ComboBox cbFs, cbBits, cbCh, cbDev, cbDisp, cbCount;
     NumericUpDown nLen, nLat;
     readonly System.Windows.Forms.Timer meterTimer = new() { Interval = 100 };
     float holdL, holdR; bool clipHold; DateTime clipUntil;
@@ -77,6 +86,7 @@ public class MainForm : Form
         Font = new Font("Yu Gothic UI", 9F);
         KeyPreview = true;
         AutoScaleMode = AutoScaleMode.Dpi;
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
         LoadSettings();
         Ui.Fs = () => cfg.Fs;
         Ui.FftN = Ui.FftNs.Contains(cfg.FftN) ? cfg.FftN : 4096;
@@ -103,6 +113,9 @@ public class MainForm : Form
             cfg.Waves = Enumerable.Range(0, Synth.NWaves).Select(_ => new WaveParams()).ToArray();
             cfg.Waves[0].Type = WaveType.Sine; cfg.Waves[0].AmpDb = -10;
         }
+        // Wave6〜8 は使わない
+        for (int i = MaxWaves; i < Synth.NWaves; i++) cfg.Waves[i] = new WaveParams();
+        usedWaves = Math.Clamp(cfg.WaveCount, 1, MaxWaves);
         model = cfg.Waves;
     }
 
@@ -185,7 +198,7 @@ public class MainForm : Form
         tipT.SetToolTip(chkFullVol, "再生中だけ Windows のアプリ音量を最大にする (停止で元に戻す)");
         tipT.SetToolTip(bLoad, "設定ファイルを開く (Ctrl+O)  ※ウィンドウへのドロップでも可");
         tipT.SetToolTip(bSaveP, "現在の全設定をコメント付きで保存 (Ctrl+S)");
-        tipT.SetToolTip(bSave, "WAV ファイルへ出力 (Ctrl+W)");
+        tipT.SetToolTip(bSave, "WAV ファイルへ出力 (Ctrl+E)");
 
         for (int i = 0; i < Synth.NWaves; i++)
         {
@@ -195,74 +208,135 @@ public class MainForm : Form
             p.DetailRequested += ShowDetail;
             p.MultipleRequested += (pn, x) =>
             {
-                int b = pn.Index < 4 ? 0 : 4;
-                model[pn.Index].Freq = model[b].Freq * x;
+                model[pn.Index].Freq = model[0].Freq * x;   // 基準は Wave1
                 pn.Load();
                 ApplyAll(pn.Index);
             };
             panels[i] = p;
         }
-        for (int page = 0; page < 2; page++)
-        {
-            var tp = new TabPage(page == 0 ? "Wave 1,2,3,4" : "Wave 5,6,7,8") { UseVisualStyleBackColor = true };
-            var fl = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false, AutoScroll = true };
-            for (int k = 0; k < 4; k++) fl.Controls.Add(panels[page * 4 + k]);
-            tp.Controls.Add(fl);
-            tabs.TabPages.Add(tp);
-        }
-        tabs.SelectedIndex = Math.Clamp(cfg.TabIdx, 0, 1);
-        tabs.SelectedIndexChanged += (_, _) => cfg.TabIdx = tabs.SelectedIndex;
+
+        cbCount = Ui.Combo(Enumerable.Range(1, MaxWaves).Select(n => n.ToString()).ToArray(), 45);
+        cbCount.SelectedIndex = usedWaves - 1;
+        cbCount.SelectedIndexChanged += (_, _) => SetWaveCount(cbCount.SelectedIndex + 1);
 
         cbDisp = Ui.Combo(new[] { "Lch + Rch", "Lch", "Rch" }, 90);
         cbDisp.SelectedIndex = Math.Clamp(cfg.DispCh, 0, 2);
-        cbDisp.SelectedIndexChanged += (_, _) => { cfg.DispCh = scope.DispCh = cbDisp.SelectedIndex; scope.Invalidate(); };
-        levelRow.Controls.Add(Ui.Lbl("表示ch"));
+        cbDisp.SelectedIndexChanged += (_, _) => { cfg.DispCh = scope.DispCh = cbDisp.SelectedIndex; UpdateSplit(); };
+        chkSplit = new CheckBox { Text = "L/R分離", Appearance = Appearance.Button, AutoSize = true, Margin = new Padding(4, 2, 2, 2), Checked = cfg.SplitLR };
+        chkSplit.CheckedChanged += (_, _) => { cfg.SplitLR = chkSplit.Checked; UpdateSplit(); };
+        levelRow.Controls.Add(Ui.Lbl("Wave数"));
+        levelRow.Controls.Add(cbCount);
+        levelRow.Controls.Add(Ui.Lbl("  表示ch"));
         levelRow.Controls.Add(cbDisp);
+        levelRow.Controls.Add(chkSplit);
         levelRow.Controls.Add(Ui.Lbl("  Level (dBFS rms)"));
-        for (int i = 0; i < Synth.NWaves; i++)
+        for (int i = 0; i < MaxWaves; i++)
         {
-            levelRow.Controls.Add(Ui.Lbl($"{i + 1}:"));
+            levelRow.Controls.Add(levelNum[i] = Ui.Lbl($"{i + 1}:"));
             levelLbl[i] = new Label { AutoSize = false, Width = 52, Height = 22, BorderStyle = BorderStyle.Fixed3D, TextAlign = ContentAlignment.MiddleRight, Margin = new Padding(0, 3, 4, 2) };
             levelRow.Controls.Add(levelLbl[i]);
         }
         levelRow.Controls.Add(outLbl);
+        tipT.SetToolTip(cbCount, "表示する Wave の数。隠した Wave は設定を残したまま出力しない");
+        tipT.SetToolTip(chkSplit, "L と R を上下に分けて表示 (表示ch が Lch + Rch・Stereo のとき) (Ctrl+D)");
 
         scope.SpanIdx = Math.Clamp(cfg.SpanIdx, 0, ScopeView.Spans.Length - 1);
         scope.YZoomIdx = Math.Clamp(cfg.YZoomIdx, 0, ScopeView.YZooms.Length - 1);
         scope.DispCh = cbDisp.SelectedIndex;
+        scope.Split = cfg.SplitLR;
         scope.SpanChanged += (_, _) => { cfg.SpanIdx = scope.SpanIdx; cfg.YZoomIdx = scope.YZoomIdx; UpdateScope(); };
         scope.DoubleClick += (_, _) => { if (!fullScreen) { SetFullScreen(true); SetControlsHidden(true); } else { SetControlsHidden(false); SetFullScreen(false); } };
         scope.MouseDown += (_, _) => scope.Focus();
 
+        LayoutPanels();
+
         // Dock の順序: Fill を先に追加し、Top は下から順に追加
         Controls.Add(scope);
         Controls.Add(levelRow);
-        Controls.Add(tabs);
+        Controls.Add(panelRow);
         Controls.Add(toolbar);
 
         var tip = new ToolTip();
-        tip.SetToolTip(scope, "ホイール: 時間軸  Ctrl+ホイール: 振幅軸  ダブルクリック: 全画面波形表示\nF11: 全画面  F12: 波形のみ  Esc: 戻る  F5: 再生/停止");
+        tip.SetToolTip(scope, "ホイール: 時間軸  Ctrl+ホイール: 振幅軸  ダブルクリック: 全画面波形表示\nF11: 全画面  F12: 波形のみ  Ctrl+D: L/R分離  Esc: 戻る  F5: 再生/停止");
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        // タブの高さをパネルに合わせる
-        var fl = tabs.TabPages[0].Controls[0];
-        int inner = fl.GetPreferredSize(Size.Empty).Height + 8;
-        tabs.Height = inner + (tabs.Height - tabs.DisplayRectangle.Height);
         toolbar.WrapContents = false;
         int tw = toolbar.GetPreferredSize(Size.Empty).Width;
         toolbar.WrapContents = true;
-        int w = Math.Min(Screen.FromControl(this).WorkingArea.Width - 40, Math.Max(fl.GetPreferredSize(Size.Empty).Width + 40, tw + 20));
-        ClientSize = new Size(Math.Max(w, 900), toolbar.Height + tabs.Height + levelRow.Height + 340);
+        int w = Math.Min(Screen.FromControl(this).WorkingArea.Width - 40, Math.Max(panelRow.GetPreferredSize(Size.Empty).Width + 40, tw + 20));
+        ClientSize = new Size(Math.Max(w, 900), toolbar.Height + panelRow.Height + levelRow.Height + 340);
         MinimumSize = new Size(400, 300);
         if (cfg.StartFullScreen) SetFullScreen(true);
         ApplyAtt();
     }
 
     // ---------------------------------------------------------------- 反映
-    WaveParams[] Snapshot() => model.Select(p => p.Clone()).ToArray();
+    /// <summary>実際に出力する波形 (表示していない Wave は OFF)</summary>
+    WaveParams[] Snapshot() => model.Select((p, i) => i < usedWaves ? p.Clone() : new WaveParams()).ToArray();
+
+    static readonly WaveParams OffWave = new();
+    WaveParams Act(int i) => i < usedWaves ? model[i] : OffWave;
+
+    // ---------------------------------------------------------------- 表示する Wave の数
+    void LayoutPanels()
+    {
+        panelRow.SuspendLayout();
+        panelRow.Controls.Clear();
+        for (int i = 0; i < usedWaves; i++) panelRow.Controls.Add(panels[i]);
+        panelRow.ResumeLayout();
+        for (int i = 0; i < MaxWaves; i++)
+        {
+            levelNum[i].Visible = levelLbl[i].Visible = i < usedWaves;
+            if (i >= usedWaves && details[i] != null && !details[i].IsDisposed) details[i].Close();
+        }
+    }
+
+    void SetWaveCount(int n)
+    {
+        n = Math.Clamp(n, 1, MaxWaves);
+        if (n == usedWaves && cbCount.SelectedIndex == n - 1) return;
+        usedWaves = cfg.WaveCount = n;
+        if (cbCount.SelectedIndex != n - 1) cbCount.SelectedIndex = n - 1;   // ここから再度呼ばれても上で戻る
+        LayoutPanels();
+        FitWindow();
+        ApplyAll();
+    }
+
+    /// <summary>操作部が全部入る大きさまでウインドウを広げる (画面に収まる範囲で)</summary>
+    void FitWindow()
+    {
+        if (fullScreen || WindowState != FormWindowState.Normal) return;
+        var wa = Screen.FromControl(this).WorkingArea;
+        int needH = toolbar.Height + panelRow.Height + levelRow.Height + 160;
+        int needW = panelRow.GetPreferredSize(Size.Empty).Width + 20;
+        int addH = Math.Min(Math.Max(0, needH - ClientSize.Height), wa.Height - Height);
+        int addW = Math.Min(Math.Max(0, needW - ClientSize.Width), wa.Width - Width);
+        if (addH <= 0 && addW <= 0) return;
+        var b = Bounds;
+        b.Width += Math.Max(0, addW); b.Height += Math.Max(0, addH);
+        b.X = Math.Max(wa.Left, Math.Min(b.X, wa.Right - b.Width));
+        b.Y = Math.Max(wa.Top, Math.Min(b.Y, wa.Bottom - b.Height));
+        Bounds = b;
+    }
+
+    // ---------------------------------------------------------------- L/R 分離表示
+    void ToggleSplit()
+    {
+        if (chkSplit.Enabled) chkSplit.Checked = !chkSplit.Checked;
+    }
+
+    /// <summary>L/R分離ボタンの状態を表示に反映 (Mono・単独ch表示では使えない)</summary>
+    void UpdateSplit()
+    {
+        chkSplit.Enabled = cfg.Stereo && cfg.DispCh == 0;
+        chkSplit.BackColor = cfg.SplitLR && chkSplit.Enabled ? Color.FromArgb(255, 220, 140) : SystemColors.Control;
+        chkSplit.UseVisualStyleBackColor = !(cfg.SplitLR && chkSplit.Enabled);
+        scope.Split = cfg.SplitLR;
+        scope.Invalidate();
+    }
 
     // ---------------------------------------------------------------- クリップ防止
     // 各チャンネルで「全波形の最大瞬間値の合計」が 1 (100%) を超えないよう制限する。
@@ -273,13 +347,13 @@ public class MainForm : Form
         bool mono = !cfg.Stereo;
         double sum = 0;
         for (int j = 0; j < Synth.NWaves; j++)
-            if (j != i && model[j].Feeds(mono)[c]) sum += model[j].PeakLin;
+            if (j != i && Act(j).Feeds(mono)[c]) sum += Act(j).PeakLin;
         return sum;
     }
 
     double Headroom(int i)
     {
-        var f = model[i].Feeds(!cfg.Stereo);
+        var f = Act(i).Feeds(!cfg.Stereo);
         double h = 1;
         for (int c = 0; c < 2; c++) if (f[c]) h = Math.Min(h, 1 - OthersPeak(i, c));
         return Math.Max(0, h);
@@ -291,7 +365,7 @@ public class MainForm : Form
     bool Violates(int c)
     {
         double sum = 0;
-        for (int j = 0; j < Synth.NWaves; j++) if (model[j].Feeds(!cfg.Stereo)[c]) sum += model[j].PeakLin;
+        for (int j = 0; j < Synth.NWaves; j++) if (Act(j).Feeds(!cfg.Stereo)[c]) sum += Act(j).PeakLin;
         return sum > 1 + Tol;
     }
 
@@ -301,9 +375,9 @@ public class MainForm : Form
         for (int guard = 0; guard < 32 && (Violates(0) || Violates(1)); guard++)
         {
             int c = Violates(0) ? 0 : 1;
-            int k = changed >= 0 && model[changed].Type != WaveType.Off && model[changed].Feeds(!cfg.Stereo)[c] ? changed
-                  : Enumerable.Range(0, Synth.NWaves).Where(j => model[j].Type != WaveType.Off && model[j].Feeds(!cfg.Stereo)[c])
-                              .OrderByDescending(j => model[j].PeakLin).First();
+            int k = changed >= 0 && Act(changed).Type != WaveType.Off && Act(changed).Feeds(!cfg.Stereo)[c] ? changed
+                  : Enumerable.Range(0, Synth.NWaves).Where(j => Act(j).Type != WaveType.Off && Act(j).Feeds(!cfg.Stereo)[c])
+                              .OrderByDescending(j => Act(j).PeakLin).First();
             var p = model[k];
             double room = Headroom(k);
             if (room - Math.Abs(p.OffsetPct) / 100 <= 1e-6)
@@ -317,7 +391,7 @@ public class MainForm : Form
         // 入力欄の上限を更新
         for (int i = 0; i < Synth.NWaves; i++)
         {
-            var p = model[i];
+            var p = Act(i);
             double room = Headroom(i);
             double ampMax = (room - Math.Abs(p.OffsetPct) / 100) / p.AmFactor;
             double offMax = Floor1((room - (p.Type == WaveType.Off ? 0 : p.AmpLin * p.AmFactor)) * 100);
@@ -351,8 +425,9 @@ public class MainForm : Form
             if (R[i] > 1) { R[i] = 1; clipped = true; } else if (R[i] < -1) { R[i] = -1; clipped = true; }
         }
         scope.WaveClipped = clipped;
+        if (chkSplit != null) UpdateSplit();
         scope.L = L; scope.R = R; scope.Fs = fs; scope.Mono = !cfg.Stereo;
-        scope.Overlay = model.Select((p, i) => p.Summary() is string s ? $"W{i + 1}: {s}" : null).Where(s => s != null).ToArray();
+        scope.Overlay = Snapshot().Select((p, i) => p.Summary() is string s ? $"W{i + 1}: {s}" : null).Where(s => s != null).ToArray();
         UpdateStatus();
         scope.Invalidate();
     }
@@ -370,9 +445,9 @@ public class MainForm : Form
     {
         int fs = cfg.Fs, n = Math.Max(4096, fs / 4);
         var L = new float[n]; var R = new float[n];
-        for (int i = 0; i < Synth.NWaves; i++)
+        for (int i = 0; i < MaxWaves; i++)
         {
-            var p = model[i].Clone();
+            var p = Act(i).Clone();
             if (p.Type == WaveType.Off) { levelLbl[i].Text = ""; continue; }
             p.DelaySamples = 0;
             var ps = Enumerable.Range(0, Synth.NWaves).Select(k => k == i ? p : new WaveParams()).ToArray();
@@ -476,12 +551,17 @@ public class MainForm : Form
             if (pf?.Waves == null || pf.Waves.Length != Synth.NWaves) throw new InvalidDataException("WaveGenFS の設定ファイルではありません");
             bool wasPlaying = player.IsPlaying;
             if (wasPlaying) StopPlay();
+            var dropped = Enumerable.Range(MaxWaves, Synth.NWaves - MaxWaves)
+                                    .Where(i => (pf.Waves[i]?.Type ?? WaveType.Off) != WaveType.Off).ToArray();
             for (int i = 0; i < Synth.NWaves; i++)
             {
-                model[i] = pf.Waves[i] ?? new WaveParams();
+                model[i] = i < MaxWaves ? pf.Waves[i] ?? new WaveParams() : new WaveParams();
                 panels[i].P = model[i];
                 if (details[i] != null && !details[i].IsDisposed) details[i].Close();
             }
+            // 使っている Wave が隠れていれば表示数を増やす
+            int last = Array.FindLastIndex(model, w => w.Type != WaveType.Off);
+            if (last >= usedWaves) SetWaveCount(last + 1);
             cfg.Waves = model;
             cfg.FftN = Ui.FftN = Ui.FftNs.Contains(pf.FftN) ? pf.FftN : 4096;
             cfg.AttN = pf.AttN; cfg.AttOn = pf.AttOn;
@@ -498,6 +578,9 @@ public class MainForm : Form
             cfg.LastParamDir = Path.GetDirectoryName(path);
             Text = $"WaveGenFS - {Path.GetFileName(path)}";
             if (wasPlaying) StartPlay();
+            if (dropped.Length > 0)
+                MessageBox.Show(this, "このファイルの " + string.Join(", ", dropped.Select(i => $"Wave{i + 1}")) + " は使わないため OFF にしました。",
+                                $"Wave1〜{MaxWaves} だけ読み込みました", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex)
         {
@@ -567,7 +650,7 @@ public class MainForm : Form
     void SetControlsHidden(bool hide)
     {
         controlsHidden = hide;
-        toolbar.Visible = tabs.Visible = levelRow.Visible = !hide;
+        toolbar.Visible = panelRow.Visible = levelRow.Visible = !hide;
         bHide.Text = hide ? "操作部表示 (F12)" : "波形のみ (F12)";
         if (hide) scope.Focus();
     }
@@ -581,7 +664,9 @@ public class MainForm : Form
             case Keys.F5: TogglePlay(); return true;
             case Keys.Control | Keys.O: OpenParamFile(); return true;
             case Keys.Control | Keys.S: SaveParamFile(); return true;
+            case Keys.Control | Keys.E: SaveWav(); return true;
             case Keys.Control | Keys.W: SaveWav(); return true;
+            case Keys.Control | Keys.D: ToggleSplit(); return true;
             case Keys.Escape when fullScreen || controlsHidden:
                 SetControlsHidden(false); SetFullScreen(false); return true;
         }
