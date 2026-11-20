@@ -73,7 +73,7 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "WaveGenFS - 音声テスト信号発生器";
+        Text = "WaveGenFS - 低周波信号発生器";
         Font = new Font("Yu Gothic UI", 9F);
         KeyPreview = true;
         AutoScaleMode = AutoScaleMode.Dpi;
